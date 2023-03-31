@@ -8,12 +8,14 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "forge-std/console2.sol";
 
-contract StrategyMigrationTest is StrategyFixture {
+contract StrategyOperationsTest is StrategyFixture {
+    // setup is run on before each test
     function setUp() public override {
+        // setup vault
         super.setUp();
     }
 
-    function testMigration(uint256 _amount) public {
+    function testStrategyLimitedLiquidityNoLoss(uint256 _amount) public {
         vm.assume(_amount > minFuzzAmt && _amount < maxFuzzAmt);
         for (uint8 i = 0; i < assetFixtures.length; ++i) {
             AssetFixture memory _assetFixture = assetFixtures[i];
@@ -29,25 +31,29 @@ contract StrategyMigrationTest is StrategyFixture {
             if (keccak256(abi.encodePacked(_wantSymbol)) == keccak256(abi.encodePacked("WETH"))) {
                 _amount = _amount / 1_000;
             }
-
             deal(address(want), user, _amount);
 
-            // Deposit to the vault and harvest
+            uint256 balanceBefore = want.balanceOf(address(user));
             vm.prank(user);
             want.approve(address(vault), _amount);
             vm.prank(user);
             vault.deposit(_amount);
-            skip(1);
+            assertRelApproxEq(want.balanceOf(address(vault)), _amount, DELTA);
+
+            skip(3 minutes);
             vm.prank(strategist);
             strategy.harvest();
             assertRelApproxEq(strategy.estimatedTotalAssets(), _amount, DELTA);
 
-            // Migrate to a new strategy
+            // @todo here we will simulate only 50% of liquidity (full withdraw not possible)
+
             vm.prank(strategist);
-            Strategy newStrategy = Strategy(deployStrategy(address(vault), ERC20(address(want)).symbol()));
-            vm.prank(gov);
-            vault.migrateStrategy(address(strategy), address(newStrategy));
-            assertRelApproxEq(newStrategy.estimatedTotalAssets(), _amount, DELTA);
+            strategy.tend();
+
+            vm.prank(user);
+            vault.withdraw();
+
+            assertRelApproxEq(want.balanceOf(user), balanceBefore, DELTA);
         }
     }
 }
